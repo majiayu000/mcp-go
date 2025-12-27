@@ -75,6 +75,58 @@ func TestToolWithRawSchema(t *testing.T) {
 	assert.Contains(t, required, "query")
 }
 
+// TestToolAnnotationsSerializationOmitted verifies that empty annotations are omitted
+// from JSON output when using NewToolWithRawSchema (which doesn't set annotations)
+func TestToolAnnotationsSerializationOmitted(t *testing.T) {
+	// Create a tool with raw schema - annotations will be empty/zero values
+	rawSchema := json.RawMessage(`{"type": "object", "properties": {"query": {"type": "string"}}}`)
+	tool := NewToolWithRawSchema("search-tool", "Search API", rawSchema)
+
+	// Marshal to JSON
+	data, err := json.Marshal(tool)
+	assert.NoError(t, err)
+
+	// Unmarshal to map to check if annotations field exists
+	var result map[string]any
+	err = json.Unmarshal(data, &result)
+	assert.NoError(t, err)
+
+	// Verify annotations is NOT present when empty
+	_, hasAnnotations := result["annotations"]
+	assert.False(t, hasAnnotations, "annotations should be omitted when empty")
+}
+
+// TestToolAnnotationsSerializationIncluded verifies that annotations are included
+// in JSON output when using NewTool (which sets default annotations)
+func TestToolAnnotationsSerializationIncluded(t *testing.T) {
+	// Create a tool with NewTool - annotations will have default values
+	tool := NewTool("test-tool",
+		WithDescription("A test tool"),
+		WithString("input", Description("Test input")),
+	)
+
+	// Marshal to JSON
+	data, err := json.Marshal(tool)
+	assert.NoError(t, err)
+
+	// Unmarshal to map to check if annotations field exists
+	var result map[string]any
+	err = json.Unmarshal(data, &result)
+	assert.NoError(t, err)
+
+	// Verify annotations IS present when set
+	annotations, hasAnnotations := result["annotations"]
+	assert.True(t, hasAnnotations, "annotations should be present when set")
+
+	// Verify annotations has the expected default values
+	annotationsMap, ok := annotations.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, false, annotationsMap["readOnlyHint"])
+	assert.Equal(t, true, annotationsMap["destructiveHint"])
+	assert.Equal(t, false, annotationsMap["idempotentHint"])
+	assert.Equal(t, true, annotationsMap["openWorldHint"])
+}
+
 func TestUnmarshalToolWithRawSchema(t *testing.T) {
 	// Create a complex raw schema
 	rawSchema := json.RawMessage(`{
