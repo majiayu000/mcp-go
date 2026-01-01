@@ -1693,3 +1693,188 @@ func TestWithToolIcons(t *testing.T) {
 
 	assert.Equal(t, icons, tool.Icons)
 }
+
+// TestToolArgumentsSchemaExtraFieldsPreserved tests that extra JSON Schema fields
+// like additionalProperties, items, oneOf, anyOf, allOf, etc. are preserved during
+// JSON serialization round-trips.
+func TestToolArgumentsSchemaExtraFieldsPreserved(t *testing.T) {
+	tests := []struct {
+		name     string
+		jsonData string
+	}{
+		{
+			name: "additionalProperties as boolean",
+			jsonData: `{
+				"type": "object",
+				"properties": {
+					"name": {"type": "string"}
+				},
+				"additionalProperties": false
+			}`,
+		},
+		{
+			name: "additionalProperties as schema",
+			jsonData: `{
+				"type": "object",
+				"properties": {
+					"name": {"type": "string"}
+				},
+				"additionalProperties": {"type": "string"}
+			}`,
+		},
+		{
+			name: "items field",
+			jsonData: `{
+				"type": "array",
+				"items": {"type": "string", "minLength": 1}
+			}`,
+		},
+		{
+			name: "oneOf field",
+			jsonData: `{
+				"type": "object",
+				"oneOf": [
+					{"properties": {"type": {"const": "a"}}},
+					{"properties": {"type": {"const": "b"}}}
+				]
+			}`,
+		},
+		{
+			name: "anyOf field",
+			jsonData: `{
+				"type": "object",
+				"anyOf": [
+					{"required": ["name"]},
+					{"required": ["id"]}
+				]
+			}`,
+		},
+		{
+			name: "allOf field",
+			jsonData: `{
+				"type": "object",
+				"allOf": [
+					{"properties": {"base": {"type": "string"}}},
+					{"properties": {"extended": {"type": "number"}}}
+				]
+			}`,
+		},
+		{
+			name: "minItems and maxItems",
+			jsonData: `{
+				"type": "array",
+				"items": {"type": "number"},
+				"minItems": 1,
+				"maxItems": 10
+			}`,
+		},
+		{
+			name: "format field",
+			jsonData: `{
+				"type": "object",
+				"properties": {
+					"email": {"type": "string", "format": "email"}
+				}
+			}`,
+		},
+		{
+			name: "multiple extra fields",
+			jsonData: `{
+				"type": "object",
+				"properties": {
+					"data": {"type": "object"}
+				},
+				"required": ["data"],
+				"additionalProperties": false,
+				"minProperties": 1,
+				"maxProperties": 5
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Unmarshal original JSON
+			var schema ToolArgumentsSchema
+			err := json.Unmarshal([]byte(tt.jsonData), &schema)
+			assert.NoError(t, err)
+
+			// Marshal back to JSON
+			marshaledData, err := json.Marshal(schema)
+			assert.NoError(t, err)
+
+			// Unmarshal both original and marshaled to maps for comparison
+			var original, marshaled map[string]any
+			err = json.Unmarshal([]byte(tt.jsonData), &original)
+			assert.NoError(t, err)
+			err = json.Unmarshal(marshaledData, &marshaled)
+			assert.NoError(t, err)
+
+			// Verify all original fields are preserved
+			for key, value := range original {
+				assert.Contains(t, marshaled, key, "Field %q should be preserved", key)
+				assert.Equal(t, value, marshaled[key], "Value for field %q should match", key)
+			}
+		})
+	}
+}
+
+// TestToolWithExtraSchemaFieldsRoundTrip tests that a Tool with extra schema fields
+// in InputSchema preserves those fields through a marshal/unmarshal cycle.
+func TestToolWithExtraSchemaFieldsRoundTrip(t *testing.T) {
+	// Create a raw schema with extra fields
+	rawSchema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"items": {
+				"type": "array",
+				"items": {"type": "string"},
+				"minItems": 1,
+				"maxItems": 100
+			}
+		},
+		"required": ["items"],
+		"additionalProperties": false
+	}`)
+
+	// Create a tool with raw schema
+	tool := NewToolWithRawSchema("test-tool", "Test tool", rawSchema)
+
+	// Marshal to JSON
+	data, err := json.Marshal(tool)
+	assert.NoError(t, err)
+
+	// Unmarshal back to Tool
+	var unmarshaledTool Tool
+	err = json.Unmarshal(data, &unmarshaledTool)
+	assert.NoError(t, err)
+
+	// Marshal the unmarshaled tool again
+	remarshaled, err := json.Marshal(unmarshaledTool)
+	assert.NoError(t, err)
+
+	// Parse both JSONs to maps for comparison
+	var firstMarshal, secondMarshal map[string]any
+	err = json.Unmarshal(data, &firstMarshal)
+	assert.NoError(t, err)
+	err = json.Unmarshal(remarshaled, &secondMarshal)
+	assert.NoError(t, err)
+
+	// Verify inputSchema is preserved
+	firstSchema := firstMarshal["inputSchema"].(map[string]any)
+	secondSchema := secondMarshal["inputSchema"].(map[string]any)
+
+	// Check that additionalProperties is preserved
+	assert.Equal(t, firstSchema["additionalProperties"], secondSchema["additionalProperties"],
+		"additionalProperties should be preserved")
+
+	// Check properties are preserved
+	firstProps := firstSchema["properties"].(map[string]any)
+	secondProps := secondSchema["properties"].(map[string]any)
+
+	firstItems := firstProps["items"].(map[string]any)
+	secondItems := secondProps["items"].(map[string]any)
+
+	assert.Equal(t, firstItems["minItems"], secondItems["minItems"], "minItems should be preserved")
+	assert.Equal(t, firstItems["maxItems"], secondItems["maxItems"], "maxItems should be preserved")
+}

@@ -639,14 +639,44 @@ type ToolArgumentsSchema struct {
 	Type       string         `json:"type"`
 	Properties map[string]any `json:"properties,omitempty"`
 	Required   []string       `json:"required,omitempty"`
+	// Extra holds additional JSON Schema fields not explicitly defined in the struct.
+	// This ensures fields like additionalProperties, items, oneOf, anyOf, allOf, etc.
+	// are preserved during JSON serialization round-trips.
+	Extra map[string]any `json:"-"`
 }
 
 type ToolInputSchema ToolArgumentsSchema // For retro-compatibility
 type ToolOutputSchema ToolArgumentsSchema
 
 // MarshalJSON implements the json.Marshaler interface for ToolInputSchema.
+func (tis ToolInputSchema) MarshalJSON() ([]byte, error) {
+	return ToolArgumentsSchema(tis).MarshalJSON()
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface for ToolInputSchema.
+func (tis *ToolInputSchema) UnmarshalJSON(data []byte) error {
+	return (*ToolArgumentsSchema)(tis).UnmarshalJSON(data)
+}
+
+// MarshalJSON implements the json.Marshaler interface for ToolOutputSchema.
+func (tos ToolOutputSchema) MarshalJSON() ([]byte, error) {
+	return ToolArgumentsSchema(tos).MarshalJSON()
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface for ToolOutputSchema.
+func (tos *ToolOutputSchema) UnmarshalJSON(data []byte) error {
+	return (*ToolArgumentsSchema)(tos).UnmarshalJSON(data)
+}
+
+// MarshalJSON implements the json.Marshaler interface for ToolInputSchema.
 func (tis ToolArgumentsSchema) MarshalJSON() ([]byte, error) {
 	m := make(map[string]any)
+
+	// Include any extra fields first (so explicit fields can override if needed)
+	for k, v := range tis.Extra {
+		m[k] = v
+	}
+
 	m["type"] = tis.Type
 
 	if tis.Defs != nil {
@@ -668,23 +698,55 @@ func (tis ToolArgumentsSchema) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON implements the json.Unmarshaler interface for ToolArgumentsSchema.
 // It handles both "$defs" (JSON Schema 2019-09+) and "definitions" (JSON Schema draft-07)
 // by reading either field and storing it in the Defs field.
+// It also captures any additional fields not explicitly defined in the struct.
 func (tis *ToolArgumentsSchema) UnmarshalJSON(data []byte) error {
-	// Use a temporary type to avoid infinite recursion
-	type Alias ToolArgumentsSchema
-	aux := &struct {
-		Definitions map[string]any `json:"definitions,omitempty"`
-		*Alias
-	}{
-		Alias: (*Alias)(tis),
-	}
-
-	if err := json.Unmarshal(data, aux); err != nil {
+	// First, unmarshal into a generic map to capture all fields
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
-	// If $defs wasn't provided but definitions was, use definitions
-	if tis.Defs == nil && aux.Definitions != nil {
-		tis.Defs = aux.Definitions
+	// Extract known fields
+	if v, ok := raw["type"].(string); ok {
+		tis.Type = v
+	}
+
+	if v, ok := raw["properties"].(map[string]any); ok {
+		tis.Properties = v
+	}
+
+	if v, ok := raw["required"].([]any); ok {
+		tis.Required = make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				tis.Required = append(tis.Required, s)
+			}
+		}
+	}
+
+	// Handle both "$defs" (2019-09+) and "definitions" (draft-07)
+	if v, ok := raw["$defs"].(map[string]any); ok {
+		tis.Defs = v
+	} else if v, ok := raw["definitions"].(map[string]any); ok {
+		tis.Defs = v
+	}
+
+	// Capture extra fields not explicitly defined in the struct
+	knownFields := map[string]bool{
+		"type":        true,
+		"properties":  true,
+		"required":    true,
+		"$defs":       true,
+		"definitions": true,
+	}
+
+	for k, v := range raw {
+		if !knownFields[k] {
+			if tis.Extra == nil {
+				tis.Extra = make(map[string]any)
+			}
+			tis.Extra[k] = v
+		}
 	}
 
 	return nil
